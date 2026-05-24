@@ -1,0 +1,79 @@
+------------------------------ MODULE FlexPaxosGraph ------------------------------
+EXTENDS Integers, FiniteSets, Sequences
+CONSTANT N
+(***************************************************************************)
+(* Configuration Space                                                     *)
+(***************************************************************************)
+Configs == { <<r, w>> \in (1..N) \X (1..N) : r + w > N }
+R(q) == q[1]
+W(q) == q[2]
+(***************************************************************************)
+(* Adjacency: Cross-intersection                                           *)
+(***************************************************************************)
+Adjacent(q1, q2) ==
+  /\ W(q1) + R(q2) > N
+  /\ W(q2) + R(q1) > N
+Neighbors(q) == { q2 \in Configs : q2 /= q /\ Adjacent(q, q2) }
+(***************************************************************************)
+(* Key Configurations                                                      *)
+(***************************************************************************)
+ReadOptimal  == <<1, N>>
+WriteOptimal == <<N, 1>>
+MaxConfig    == <<N, N>>
+MajSize == (N \div 2) + 1
+MajConfigs == { <<r, w>> \in Configs : r >= MajSize /\ w >= MajSize }
+(***************************************************************************)
+(* Structural Properties                                                   *)
+(***************************************************************************)
+UniversalHub ==
+  \A q \in Configs : q /= MaxConfig => Adjacent(MaxConfig, q)
+NoCheaperHub ==
+  \A h \in 1..(N-1) :
+    <<h, h>> \in Configs =>
+      \E q \in Configs : q /= <<h, h>> /\ ~Adjacent(<<h, h>>, q)
+MajNotUniversal ==
+  \E q \in Configs :
+    q /= <<MajSize, MajSize>> /\ ~Adjacent(<<MajSize, MajSize>>, q)
+ExtremalsNotAdjacent ==
+  ~Adjacent(ReadOptimal, WriteOptimal)
+Diameter2 ==
+  \A q1, q2 \in Configs :
+    q1 = q2 \/
+    Adjacent(q1, q2) \/
+    \E q3 \in Configs :
+        Adjacent(q1, q3) /\ Adjacent(q3, q2)
+DiameterNot1 ==
+  \E q1, q2 \in Configs : q1 /= q2 /\ ~Adjacent(q1, q2)
+ForcedBottleneck ==
+  \A q \in Neighbors(ReadOptimal) : W(q) = N
+ForcedBottleneckSym ==
+  \A q \in Neighbors(WriteOptimal) : R(q) = N
+Unique2HopIntermediate ==
+  \A q \in Configs :
+    (Adjacent(ReadOptimal, q) /\ Adjacent(q, WriteOptimal))
+      => q = MaxConfig
+Subopt(q) == W(q) - 1
+Min2HopCost ==
+  \A q \in Configs :
+    (Adjacent(ReadOptimal, q) /\ Adjacent(q, WriteOptimal))
+      => Subopt(q) = N - 1
+ClassicalComplete ==
+  \A q1, q2 \in MajConfigs :
+    q1 = q2 \/ Adjacent(q1, q2)
+(***************************************************************************)
+(* Master Predicate                                                        *)
+(***************************************************************************)
+StructuralProperties ==
+  /\ N >= 3
+  /\ UniversalHub
+  /\ NoCheaperHub
+  /\ MajNotUniversal
+  /\ ExtremalsNotAdjacent
+  /\ Diameter2
+  /\ DiameterNot1
+  /\ ForcedBottleneck
+  /\ ForcedBottleneckSym
+  /\ Unique2HopIntermediate
+  /\ Min2HopCost
+  /\ ClassicalComplete
+===============================================================================

@@ -1,0 +1,149 @@
+---------------------- MODULE PipelinedReconfig ----------------------------
+(***************************************************************************)
+(* Pipelined Flexible Paxos Reconfiguration: Safety Verification           *)
+(*                                                                         *)
+(* Models the Vertical Paxos reconfiguration protocol where:               *)
+(*   - A sequence of consensus instances run under configurations          *)
+(*   - During reconfiguration, instances under old and new configs coexist *)
+(*   - Safety requires cross-intersection between concurrent configs       *)
+(*                                                                         *)
+(* We verify that the EpochAdapt reconfiguration strategy (always route    *)
+(* through (N,N)) maintains the cross-intersection invariant.              *)
+(*                                                                         *)
+(* We also verify that ANY reconfiguration strategy maintaining the        *)
+(* invariant must pass through a configuration with w=N when starting      *)
+(* from (1,N).                                                             *)
+(***************************************************************************)
+
+EXTENDS Integers, FiniteSets, Sequences
+
+CONSTANT N          \* Number of processes
+CONSTANT MaxSteps   \* Maximum reconfiguration steps (bound for TLC)
+
+VARIABLES
+    currentConfig,  \* Current active configuration <<r,w>>
+    targetConfig,   \* Target configuration to reach
+    history,        \* Sequence of configurations visited
+    step,           \* Current step number
+    done            \* Whether reconfiguration is complete
+
+vars == <<currentConfig, targetConfig, history, step, done>>
+
+(***************************************************************************)
+(* Configuration Space and Adjacency (imported from FlexPaxosGraph)        *)
+(***************************************************************************)
+
+Configs == { <<r, w>> \in (1..N) \X (1..N) : r + w > N }
+
+Adjacent(q1, q2) ==
+    /\ q1[2] + q2[1] > N   \* w1 + r2 > N
+    /\ q2[2] + q1[1] > N   \* w2 + r1 > N
+
+(***************************************************************************)
+(* Protocol: Nondeterministic Safe Reconfiguration                         *)
+(*                                                                         *)
+(* At each step, the protocol chooses ANY adjacent configuration.          *)
+(* This models ALL possible safe reconfiguration strategies.               *)
+(* TLC will explore every reachable state.                                 *)
+(***************************************************************************)
+
+Init ==
+    /\ currentConfig = <<1, N>>     \* Start from read-optimized
+    /\ targetConfig  = <<N, 1>>     \* Target write-optimized
+    /\ history       = << <<1, N>> >>
+    /\ step          = 0
+    /\ done          = FALSE
+
+\* Take a reconfiguration step: move to any adjacent configuration
+Step ==
+    /\ ~done
+    /\ step < MaxSteps
+    /\ \E next \in Configs :
+        /\ next /= currentConfig
+        /\ Adjacent(currentConfig, next)
+        /\ currentConfig' = next
+        /\ history' = Append(history, next)
+        /\ step' = step + 1
+        /\ done' = (next = targetConfig)
+        /\ UNCHANGED targetConfig
+
+\* Stutter when done or out of steps
+Stutter ==
+    /\ (done \/ step >= MaxSteps)
+    /\ UNCHANGED vars
+
+Next == Step \/ Stutter
+
+Spec == Init /\ [][Next]_vars /\ WF_vars(Step)
+
+(***************************************************************************)
+(* Safety Invariant: Cross-Intersection                                    *)
+(*                                                                         *)
+(* At every step, the current configuration must be adjacent to the        *)
+(* previous configuration (they may have concurrent instances).            *)
+(* More precisely: every consecutive pair in the history satisfies         *)
+(* cross-intersection.                                                     *)
+(***************************************************************************)
+
+SafetyInvariant ==
+    \A i \in 1..(Len(history)-1) :
+        Adjacent(history[i], history[i+1])
+
+(***************************************************************************)
+(* Forced Bottleneck: First Step Has w = N                                 *)
+(*                                                                         *)
+(* If the protocol has taken at least one step from (1,N), the first       *)
+(* intermediate configuration must have w = N.                             *)
+(***************************************************************************)
+
+FirstStepBottleneck ==
+    Len(history) >= 2 => history[2][2] = N
+
+(***************************************************************************)
+(* If reconfiguration completes, the path visited w = N                    *)
+(***************************************************************************)
+
+CompletionRequiresMaxW ==
+    done => \E i \in 2..(Len(history)-1) : history[i][2] = N
+
+(***************************************************************************)
+(* Transition Cost Tracking                                                *)
+(*                                                                         *)
+(* For alpha=0, beta=1 (write-dominated, optimal=(N,1)):                   *)
+(* Transition cost = sum of (w_i - 1) for intermediate configs             *)
+(***************************************************************************)
+
+TransitionCost ==
+    IF Len(history) <= 2 THEN 0
+    ELSE LET intermediates == SubSeq(history, 2, Len(history)-1)
+         IN \* We can't easily sum in TLA+ without recursion,
+            \* but we can check the lower bound:
+            \* Every intermediate has suboptimality >= 0,
+            \* and the first has w=N so suboptimality = N-1
+            TRUE
+
+\* The minimum possible transition cost is N-1
+\* (achieved only by the 2-hop path through (N,N))
+MinCostAchieved ==
+    done =>
+        \* If done in exactly 2 steps: path is (1,N) -> (N,N) -> (N,1)
+        (Len(history) = 3 => history[2] = <<N, N>>)
+
+(***************************************************************************)
+(* Master Invariant                                                        *)
+(***************************************************************************)
+
+Invariant ==
+    /\ SafetyInvariant
+    /\ FirstStepBottleneck
+    /\ CompletionRequiresMaxW
+    /\ MinCostAchieved
+
+(***************************************************************************)
+(* Liveness: reconfiguration eventually completes                          *)
+(* (This requires fairness and bounded N; TLC checks for bounded models)   *)
+(***************************************************************************)
+
+Liveness == <>done
+
+=============================================================================

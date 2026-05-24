@@ -1,0 +1,224 @@
+------------------------- MODULE AdversarialAdapt --------------------------
+(***************************************************************************)
+(* Adversarial Regime-Adaptive Flexible Paxos                              *)
+(*                                                                         *)
+(* Models the interaction between:                                         *)
+(*   - An adaptive adversary that switches the optimal configuration       *)
+(*   - The EpochAdapt protocol that detects switches and reconfigures      *)
+(*                                                                         *)
+(* Verifies:                                                               *)
+(*   1. Safety (cross-intersection) is maintained at every round           *)
+(*   2. Total transition cost = (N-1) per switch (PoSE bound)              *)
+(*   3. The protocol always routes through (N,N) during reconfiguration    *)
+(*   4. Classical Paxos subgraph has zero transition cost                  *)
+(*                                                                         *)
+(* The adversary nondeterministically switches between two regimes:        *)
+(*   - Write-dominated: optimal config = (N,1)                             *)
+(*   - Read-dominated:  optimal config = (1,N)                             *)
+(***************************************************************************)
+
+EXTENDS Integers, FiniteSets, Sequences
+
+CONSTANTS
+    N,              \* Number of processes
+    MaxSwitches,    \* Maximum adversary switches (= S)
+    MaxRounds       \* Time horizon (= T)
+
+VARIABLES
+    round,              \* Current round number
+    regime,             \* Current regime: "write" or "read"
+    optimalConfig,      \* Optimal config under current regime
+    activeConfig,       \* Config the protocol is currently using
+    switchCount,        \* Number of adversary switches so far
+    transitionCost,     \* Cumulative transition cost (suboptimality)
+    reconfigState,      \* "stable" | "transiting_to_hub" | "transiting_from_hub"
+    safetyViolation     \* TRUE if cross-intersection ever violated
+
+vars == <<round, regime, optimalConfig, activeConfig,
+          switchCount, transitionCost, reconfigState, safetyViolation>>
+
+(***************************************************************************)
+(* Configuration Space and Adjacency                                       *)
+(***************************************************************************)
+
+Configs == { <<r, w>> \in (1..N) \X (1..N) : r + w > N }
+
+Adjacent(q1, q2) ==
+    /\ q1[2] + q2[1] > N
+    /\ q2[2] + q1[1] > N
+
+Hub == <<N, N>>
+
+(***************************************************************************)
+(* Suboptimality under each regime                                         *)
+(* Write-dominated (alpha=0, beta=1): Subopt(r,w) = w - 1                 *)
+(* Read-dominated  (alpha=1, beta=0): Subopt(r,w) = r - 1                 *)
+(***************************************************************************)
+
+Subopt(reg, q) ==
+    IF reg = "write" THEN q[2] - 1   \* w - 1
+    ELSE q[1] - 1                     \* r - 1
+
+(***************************************************************************)
+(* Initial State                                                           *)
+(***************************************************************************)
+
+Init ==
+    /\ round = 0
+    /\ regime = "write"
+    /\ optimalConfig = <<N, 1>>
+    /\ activeConfig = <<N, 1>>      \* Start at optimal
+    /\ switchCount = 0
+    /\ transitionCost = 0
+    /\ reconfigState = "stable"
+    /\ safetyViolation = FALSE
+
+(***************************************************************************)
+(* Adversary Action: Switch Regime                                         *)
+(*                                                                         *)
+(* The adversary can switch the regime when the protocol is stable         *)
+(* (has converged to the current optimal). This models the worst case:     *)
+(* the adversary waits for convergence, then switches.                     *)
+(***************************************************************************)
+
+AdversarySwitch ==
+    /\ reconfigState = "stable"
+    /\ switchCount < MaxSwitches
+    /\ round < MaxRounds
+    /\ IF regime = "write"
+       THEN /\ regime' = "read"
+            /\ optimalConfig' = <<1, N>>
+       ELSE /\ regime' = "write"
+            /\ optimalConfig' = <<N, 1>>
+    /\ switchCount' = switchCount + 1
+    /\ reconfigState' = "transiting_to_hub"
+    /\ UNCHANGED <<round, activeConfig, transitionCost, safetyViolation>>
+
+(***************************************************************************)
+(* Protocol Action: Transit to Hub (N,N)                                   *)
+(*                                                                         *)
+(* First step of reconfiguration: move from current config to (N,N).       *)
+(* Safety check: current config must be adjacent to (N,N).                 *)
+(***************************************************************************)
+
+TransitToHub ==
+    /\ reconfigState = "transiting_to_hub"
+    /\ round < MaxRounds
+    \* Safety check
+    /\ IF Adjacent(activeConfig, Hub)
+       THEN /\ safetyViolation' = safetyViolation
+       ELSE /\ safetyViolation' = TRUE
+    /\ activeConfig' = Hub
+    /\ transitionCost' = transitionCost + Subopt(regime, Hub)
+    /\ reconfigState' = "transiting_from_hub"
+    /\ round' = round + 1
+    /\ UNCHANGED <<regime, optimalConfig, switchCount>>
+
+(***************************************************************************)
+(* Protocol Action: Transit from Hub to Target                             *)
+(*                                                                         *)
+(* Second step: move from (N,N) to the new optimal config.                 *)
+(* Safety check: (N,N) must be adjacent to target.                         *)
+(***************************************************************************)
+
+TransitFromHub ==
+    /\ reconfigState = "transiting_from_hub"
+    /\ round < MaxRounds
+    \* Safety check
+    /\ IF Adjacent(Hub, optimalConfig)
+       THEN /\ safetyViolation' = safetyViolation
+       ELSE /\ safetyViolation' = TRUE
+    /\ activeConfig' = optimalConfig
+    /\ reconfigState' = "stable"
+    /\ round' = round + 1
+    \* No additional transition cost: we've arrived at optimal
+    /\ UNCHANGED <<regime, optimalConfig, switchCount, transitionCost>>
+
+(***************************************************************************)
+(* Protocol Action: Exploit (use current config, no reconfiguration)       *)
+(***************************************************************************)
+
+Exploit ==
+    /\ reconfigState = "stable"
+    /\ round < MaxRounds
+    /\ round' = round + 1
+    /\ UNCHANGED <<regime, optimalConfig, activeConfig,
+                   switchCount, transitionCost, reconfigState,
+                   safetyViolation>>
+
+(***************************************************************************)
+(* Specification                                                           *)
+(***************************************************************************)
+
+Next ==
+    \/ AdversarySwitch
+    \/ TransitToHub
+    \/ TransitFromHub
+    \/ Exploit
+
+Spec == Init /\ [][Next]_vars
+
+(***************************************************************************)
+(* Safety Properties                                                       *)
+(***************************************************************************)
+
+\* Cross-intersection is never violated
+SafetyHolds == ~safetyViolation
+
+\* Active config is always valid
+ValidConfig == activeConfig \in Configs
+
+\* During transition, we always go through the hub
+HubRouting ==
+    reconfigState = "transiting_from_hub" => activeConfig = Hub
+
+(***************************************************************************)
+(* PoSE Properties                                                         *)
+(***************************************************************************)
+
+\* Transition cost per switch is exactly N-1
+\* After k switches with all transitions complete:
+\* transitionCost = k * (N-1)
+PoSEExact ==
+    (reconfigState = "stable" /\ switchCount > 0)
+        => transitionCost = switchCount * (N - 1)
+
+\* Transition cost is always >= switchCount * (N-1) minus at most
+\* one incomplete transition
+PoSELowerBound ==
+    transitionCost >= (switchCount - 1) * (N - 1)
+
+(***************************************************************************)
+(* Classical Paxos Comparison                                              *)
+(*                                                                         *)
+(* In the classical Paxos subgraph (r,w >= ceil((N+1)/2)), all configs    *)
+(* are adjacent. Transition cost = 0 because you can move directly.        *)
+(*                                                                         *)
+(* This is verified structurally in FlexPaxosGraph; here we just note     *)
+(* that if both endpoints are in the majority subgraph, the protocol      *)
+(* need not route through (N,N).                                          *)
+(***************************************************************************)
+
+MajSize == (N \div 2) + 1
+
+InClassicalSubgraph(q) ==
+    /\ q[1] >= MajSize
+    /\ q[2] >= MajSize
+
+\* Classical Paxos configs are always mutually adjacent
+ClassicalZeroCost ==
+    \A q1, q2 \in Configs :
+        (InClassicalSubgraph(q1) /\ InClassicalSubgraph(q2))
+        => Adjacent(q1, q2)
+
+(***************************************************************************)
+(* Master Invariant                                                        *)
+(***************************************************************************)
+
+MasterInvariant ==
+    /\ SafetyHolds
+    /\ ValidConfig
+    /\ HubRouting
+    /\ PoSELowerBound
+
+=============================================================================

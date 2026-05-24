@@ -1,0 +1,111 @@
+---------------------- MODULE PipelinedReconfigOpt -------------------------
+(***************************************************************************)
+(* Optimized Pipelined Reconfiguration — no history sequence.              *)
+(*                                                                         *)
+(* Equivalent to PipelinedReconfig but tracks only the state needed for    *)
+(* invariant checking: current config, previous config, step count, and    *)
+(* whether a w=N config was visited. Eliminates the exponential state      *)
+(* explosion caused by the history variable.                               *)
+(*                                                                         *)
+(* State space: O(|Configs|^2 * MaxSteps) — manageable for N=10+.         *)
+(***************************************************************************)
+
+EXTENDS Integers, FiniteSets
+
+CONSTANT N
+CONSTANT MaxSteps
+
+VARIABLES
+    currentConfig,   \* Current active configuration
+    prevConfig,      \* Previous configuration (for adjacency check)
+    firstStep,       \* The first intermediate config (for bottleneck check)
+    step,            \* Step counter
+    done,            \* Reached target?
+    seenMaxW         \* Have we visited a config with w=N?
+
+vars == <<currentConfig, prevConfig, firstStep, step, done, seenMaxW>>
+
+(***************************************************************************)
+(* Configuration Space and Adjacency                                       *)
+(***************************************************************************)
+
+Configs == { <<r, w>> \in (1..N) \X (1..N) : r + w > N }
+
+Adjacent(q1, q2) ==
+    /\ q1[2] + q2[1] > N
+    /\ q2[2] + q1[1] > N
+
+(***************************************************************************)
+(* Protocol                                                                *)
+(***************************************************************************)
+
+Init ==
+    /\ currentConfig = <<1, N>>
+    /\ prevConfig = <<1, N>>
+    /\ firstStep = <<0, 0>>     \* sentinel: no step taken yet
+    /\ step = 0
+    /\ done = FALSE
+    /\ seenMaxW = FALSE
+
+Step ==
+    /\ ~done
+    /\ step < MaxSteps
+    /\ \E next \in Configs :
+        /\ next /= currentConfig
+        /\ Adjacent(currentConfig, next)
+        /\ prevConfig' = currentConfig
+        /\ currentConfig' = next
+        /\ firstStep' = IF step = 0 THEN next ELSE firstStep
+        /\ step' = step + 1
+        /\ done' = (next = <<N, 1>>)
+        /\ seenMaxW' = (seenMaxW \/ next[2] = N)
+
+Stutter ==
+    /\ (done \/ step >= MaxSteps)
+    /\ UNCHANGED vars
+
+Next == Step \/ Stutter
+
+Spec == Init /\ [][Next]_vars /\ WF_vars(Step)
+
+(***************************************************************************)
+(* Safety Invariant                                                        *)
+(***************************************************************************)
+
+SafetyInvariant ==
+    step > 0 => Adjacent(prevConfig, currentConfig)
+
+(***************************************************************************)
+(* Forced Bottleneck (Theorem 5.2)                                         *)
+(***************************************************************************)
+
+FirstStepBottleneck ==
+    (step >= 1 /\ firstStep /= <<0, 0>>) => firstStep[2] = N
+
+(***************************************************************************)
+(* Path through w=N required for completion                                *)
+(***************************************************************************)
+
+CompletionRequiresMaxW ==
+    done => seenMaxW
+
+(***************************************************************************)
+(* 2-hop path uniqueness (Theorem 5.3)                                     *)
+(***************************************************************************)
+
+MinCostAchieved ==
+    (done /\ step = 2) => firstStep = <<N, N>>
+
+(***************************************************************************)
+(* Master Invariant                                                        *)
+(***************************************************************************)
+
+Invariant ==
+    /\ SafetyInvariant
+    /\ FirstStepBottleneck
+    /\ CompletionRequiresMaxW
+    /\ MinCostAchieved
+
+Liveness == <>done
+
+=============================================================================
