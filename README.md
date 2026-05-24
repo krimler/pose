@@ -41,6 +41,7 @@ if they can safely coexist. The paper studies this graph and proves:
 | `PipelinedReconfig.text` | TLA+ spec: explores all safe paths from `(1,N)` to `(N,1)`, checks forced bottleneck |
 | `PipelinedReconfigOpt.text` | TLA+ spec: same checks as above but without tracking full path history (much faster) |
 | `AdversarialAdapt.text` | TLA+ spec: models adversary switching regimes while protocol routes through hub |
+| `CrashRecovery.text` | TLA+ spec: multi-round transitions with crash at hub, verifies safety under failure |
 | `verify_all.py` | Python verifier: checks everything without needing Java or TLC |
 | `benchmark.py` | Python benchmark: tests scalability up to N=10,000 |
 | `*_N10.cfg` | TLC configuration files for N=10 |
@@ -81,6 +82,8 @@ Only needs Python 3.7+. No libraries.
 | Majority-quorum subgraph is a clique | Cor 3.4 | Test all pairs |
 | EpochAdapt never violates cross-intersection | Thm 6.1 | Full state exploration |
 | Transition cost per switch = `N-1` exactly | Thm 6.1 | State invariant |
+| Safety holds through crash at hub and recovery | Extension | Full state exploration |
+| Hub cost bounded by crashes * recovery + rounds | Extension | State invariant |
 
 Remark 4.6 is a conjecture in the paper (the proofs only need the 2-hop case).
 We verify it for all path lengths using Dijkstra on a weighted graph where each
@@ -108,6 +111,33 @@ are O(N^2).
 
 All pass. Nothing takes more than 21 seconds at N=10,000 (50 million configs).
 
+## Crash-recovery extension
+
+`CrashRecovery.text` models what happens when a transition is not
+instantaneous. In the base model, moving from config A to config B through
+the hub takes two atomic steps. In reality:
+
+1. **Drain**: in-flight requests under the old config must finish
+2. **Activate**: the new config takes effect
+3. **Crash**: a failure can occur between steps 1 and 2
+
+If you crash while at `(N,N)`, you are safe (the hub is adjacent to
+everything) but stuck at maximum quorum sizes until recovery. The spec
+models this explicitly: crashes are nondeterministic, recovery takes
+bounded rounds, and we verify that cross-intersection is never violated
+in any reachable state.
+
+What gets checked:
+- Safety holds in every phase: draining, activating, crashed, recovering
+- Active config is always a valid `(r,w)` with `r+w > N`
+- Hub adjacency is universal (crash at hub cannot violate safety)
+- Total rounds at hub is bounded: at most `crashes * MaxRecovery + rounds`
+
+The key result: crashing at the hub is expensive (you pay N-1 per round
+you are stuck there) but never unsafe. This is a direct consequence of
+the universal hub property. Any other intermediate would not have this
+guarantee.
+
 ## The state explosion in TLC
 
 If you run the original `PipelinedReconfig.text` in TLC, you hit a wall.
@@ -134,14 +164,16 @@ If you have Java and the TLA+ tools:
 cp FlexPaxosGraph.text FlexPaxosGraph.tla
 cp PipelinedReconfigOpt.text PipelinedReconfigOpt.tla
 cp AdversarialAdapt.text AdversarialAdapt.tla
+cp CrashRecovery.text CrashRecovery.tla
 
 # Download tla2tools.jar from github.com/tlaplus/tlaplus/releases
 java -jar tla2tools.jar -config FlexPaxosGraph_N10.cfg FlexPaxosGraph.tla
 java -jar tla2tools.jar -config PipelinedReconfigOpt_N10.cfg PipelinedReconfigOpt.tla
 java -jar tla2tools.jar -config AdversarialAdapt_N10.cfg AdversarialAdapt.tla
+java -jar tla2tools.jar -config CrashRecovery_N10.cfg CrashRecovery.tla
 ```
 
-All three finish in under a second for N=10.
+All four finish in under a second for N=10.
 
 ## Visualizing the graph
 

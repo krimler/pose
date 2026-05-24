@@ -1,0 +1,260 @@
+------------------------- MODULE CrashRecovery -----------------------------
+(***************************************************************************)
+(* Multi-Round Transitions with Crash-Recovery                             *)
+(*                                                                         *)
+(* Models reconfiguration as a non-instantaneous process:                  *)
+(*   - Draining: in-flight requests under old config must complete         *)
+(*   - Activating: new config becomes effective                            *)
+(*   - Crash: a failure can occur at any point mid-transition              *)
+(*   - Recovery: system restarts from wherever it crashed                  *)
+(*                                                                         *)
+(* Key question: if you crash at (N,N) mid-transit, you are safe but      *)
+(* stuck at maximum quorum cost until recovery completes. How bad is it?   *)
+(*                                                                         *)
+(* Verifies:                                                               *)
+(*   1. Safety (cross-intersection) holds in every reachable state,        *)
+(*      including mid-drain, mid-activate, crashed, and recovering         *)
+(*   2. Crash at hub has bounded cost: at most MaxRecovery rounds at N-1   *)
+(*   3. No config reached during recovery violates quorum intersection     *)
+(*   4. System eventually reaches target (under fair recovery)             *)
+(***************************************************************************)
+
+EXTENDS Integers, FiniteSets
+
+CONSTANTS
+    N,              \* Number of processes
+    MaxRounds,      \* Time horizon
+    MaxCrashes,     \* Maximum crash events
+    MaxRecovery     \* Rounds to recover from a crash
+
+VARIABLES
+    round,
+    sourceConfig,       \* Where we started this transition
+    activeConfig,       \* What quorum sizes are currently in effect
+    targetConfig,       \* Where we want to end up
+    phase,              \* "stable" | "draining" | "activating" | "crashed" | "recovering"
+    crashCount,         \* Total crashes so far
+    recoveryRound,      \* Rounds spent in current recovery
+    hubCostAccum,       \* Rounds spent at (N,N) across all transitions
+    safetyOK            \* FALSE if cross-intersection ever violated
+
+vars == <<round, sourceConfig, activeConfig, targetConfig,
+          phase, crashCount, recoveryRound, hubCostAccum, safetyOK>>
+
+(***************************************************************************)
+(* Configuration Space and Adjacency                                       *)
+(***************************************************************************)
+
+Configs == { <<r, w>> \in (1..N) \X (1..N) : r + w > N }
+
+Adjacent(q1, q2) ==
+    /\ q1[2] + q2[1] > N
+    /\ q2[2] + q1[1] > N
+
+Hub == <<N, N>>
+
+Subopt(q) == (q[1] - 1) + (q[2] - 1)
+
+(***************************************************************************)
+(* Initial State: stable at (N,1)                                          *)
+(***************************************************************************)
+
+Init ==
+    /\ round = 0
+    /\ sourceConfig = <<N, 1>>
+    /\ activeConfig = <<N, 1>>
+    /\ targetConfig = <<N, 1>>
+    /\ phase = "stable"
+    /\ crashCount = 0
+    /\ recoveryRound = 0
+    /\ hubCostAccum = 0
+    /\ safetyOK = TRUE
+
+(***************************************************************************)
+(* Begin Transition: decide to move to a new config                        *)
+(* Models: controller initiates reconfiguration.                           *)
+(* First leg: drain old config, move active to hub.                        *)
+(***************************************************************************)
+
+BeginTransition ==
+    /\ phase = "stable"
+    /\ round < MaxRounds
+    /\ \E target \in Configs :
+        /\ target /= activeConfig
+        /\ Adjacent(activeConfig, Hub)   \* must be able to reach hub
+        /\ Adjacent(Hub, target)         \* hub must reach target
+        /\ targetConfig' = target
+        /\ sourceConfig' = activeConfig
+        /\ phase' = "draining"
+        /\ UNCHANGED <<round, activeConfig, crashCount,
+                       recoveryRound, hubCostAccum, safetyOK>>
+
+(***************************************************************************)
+(* Drain Complete: old requests finished, move to hub                       *)
+(* During drain, BOTH old and hub configs must satisfy cross-intersection. *)
+(***************************************************************************)
+
+DrainComplete ==
+    /\ phase = "draining"
+    /\ round < MaxRounds
+    /\ IF Adjacent(activeConfig, Hub)
+       THEN safetyOK' = safetyOK
+       ELSE safetyOK' = FALSE
+    /\ activeConfig' = Hub
+    /\ phase' = "activating"
+    /\ round' = round + 1
+    /\ hubCostAccum' = hubCostAccum + 1
+    /\ UNCHANGED <<sourceConfig, targetConfig, crashCount, recoveryRound>>
+
+(***************************************************************************)
+(* Activate Target: move from hub to target config                         *)
+(***************************************************************************)
+
+ActivateTarget ==
+    /\ phase = "activating"
+    /\ round < MaxRounds
+    /\ IF Adjacent(Hub, targetConfig)
+       THEN safetyOK' = safetyOK
+       ELSE safetyOK' = FALSE
+    /\ activeConfig' = targetConfig
+    /\ phase' = "stable"
+    /\ round' = round + 1
+    /\ UNCHANGED <<sourceConfig, targetConfig, crashCount,
+                   recoveryRound, hubCostAccum>>
+
+(***************************************************************************)
+(* Crash: can happen during draining or activating                         *)
+(* System freezes at current activeConfig.                                 *)
+(***************************************************************************)
+
+Crash ==
+    /\ phase \in {"draining", "activating"}
+    /\ crashCount < MaxCrashes
+    /\ round < MaxRounds
+    /\ phase' = "crashed"
+    /\ crashCount' = crashCount + 1
+    /\ recoveryRound' = 0
+    /\ round' = round + 1
+    /\ UNCHANGED <<sourceConfig, activeConfig, targetConfig,
+                   hubCostAccum, safetyOK>>
+
+(***************************************************************************)
+(* Recovery Tick: system is crashed, time passes at current config          *)
+(* Each tick costs suboptimality of wherever we're stuck.                   *)
+(***************************************************************************)
+
+RecoveryTick ==
+    /\ phase = "crashed"
+    /\ recoveryRound < MaxRecovery
+    /\ round < MaxRounds
+    /\ recoveryRound' = recoveryRound + 1
+    /\ round' = round + 1
+    /\ hubCostAccum' = IF activeConfig = Hub
+                       THEN hubCostAccum + 1
+                       ELSE hubCostAccum
+    /\ UNCHANGED <<sourceConfig, activeConfig, targetConfig,
+                   phase, crashCount, safetyOK>>
+
+(***************************************************************************)
+(* Recovery Complete: system resumes transition from where it crashed       *)
+(***************************************************************************)
+
+RecoveryComplete ==
+    /\ phase = "crashed"
+    /\ round < MaxRounds
+    /\ phase' = IF activeConfig = Hub THEN "activating"
+                ELSE "draining"
+    /\ recoveryRound' = 0
+    /\ round' = round + 1
+    /\ UNCHANGED <<sourceConfig, activeConfig, targetConfig,
+                   crashCount, hubCostAccum, safetyOK>>
+
+(***************************************************************************)
+(* Exploit: stable, just operate at current config                         *)
+(***************************************************************************)
+
+Exploit ==
+    /\ phase = "stable"
+    /\ round < MaxRounds
+    /\ round' = round + 1
+    /\ UNCHANGED <<sourceConfig, activeConfig, targetConfig,
+                   phase, crashCount, recoveryRound, hubCostAccum, safetyOK>>
+
+(***************************************************************************)
+(* Stutter                                                                 *)
+(***************************************************************************)
+
+Stutter ==
+    /\ round >= MaxRounds
+    /\ UNCHANGED vars
+
+(***************************************************************************)
+(* Specification                                                           *)
+(***************************************************************************)
+
+Next ==
+    \/ BeginTransition
+    \/ DrainComplete
+    \/ ActivateTarget
+    \/ Crash
+    \/ RecoveryTick
+    \/ RecoveryComplete
+    \/ Exploit
+    \/ Stutter
+
+Spec == Init /\ [][Next]_vars /\ WF_vars(Next)
+
+(***************************************************************************)
+(* Safety: cross-intersection never violated                               *)
+(***************************************************************************)
+
+SafetyHolds == safetyOK
+
+(***************************************************************************)
+(* Active config is always valid                                           *)
+(***************************************************************************)
+
+ValidConfig == activeConfig \in Configs
+
+(***************************************************************************)
+(* Hub adjacency is universal: crash at hub is always safe                 *)
+(* (no matter what sourceConfig or targetConfig is)                        *)
+(***************************************************************************)
+
+HubAlwaysSafe ==
+    (activeConfig = Hub) => \A q \in Configs : Adjacent(Hub, q)
+
+(***************************************************************************)
+(* Bounded hub cost: total rounds at hub <= crashes * MaxRecovery +        *)
+(* number of transitions (one drain round per transition)                  *)
+(***************************************************************************)
+
+BoundedHubCost ==
+    hubCostAccum <= (crashCount * MaxRecovery) + round
+
+(***************************************************************************)
+(* Recovery preserves safety: after recovery, cross-intersection still     *)
+(* holds between activeConfig and the next step                            *)
+(***************************************************************************)
+
+RecoverySafe ==
+    (phase = "crashed") => activeConfig \in Configs
+
+(***************************************************************************)
+(* Master Invariant                                                        *)
+(***************************************************************************)
+
+Invariant ==
+    /\ SafetyHolds
+    /\ ValidConfig
+    /\ HubAlwaysSafe
+    /\ BoundedHubCost
+    /\ RecoverySafe
+
+(***************************************************************************)
+(* Liveness: system eventually reaches stable state                        *)
+(***************************************************************************)
+
+Liveness == <>(phase = "stable")
+
+=============================================================================

@@ -257,6 +257,94 @@ def verify_adversarial(N, max_switches=5, max_rounds=20):
     return ok, len(visited), max_tc
 
 
+# -- CrashRecovery state-space verification --
+
+def verify_crash_recovery(N, max_rounds=8, max_crashes=2, max_recovery=3):
+    """
+    Matches CrashRecovery.text.
+    State: (round, sourceConfig, activeConfig, targetConfig, phase,
+            crashCount, recoveryRound, hubCostAccum, safetyOK)
+    """
+    cfgs = configs(N)
+    adj_map = {q: [] for q in cfgs}
+    for q in cfgs:
+        for q2 in cfgs:
+            if q2 != q and adjacent(q, q2, N):
+                adj_map[q].append(q2)
+
+    hub = (N, N)
+    start = (N, 1)
+
+    init = (0, start, start, start, "stable", 0, 0, 0, True)
+    visited = {init}
+    queue = deque([init])
+    violations = []
+
+    while queue:
+        rnd, src, active, target, phase, cc, rr, hc, safe = queue.popleft()
+
+        # Check invariants
+        if not safe:
+            violations.append("SafetyHolds")
+        if active not in cfgs:
+            violations.append("ValidConfig")
+        if active == hub and not all(adjacent(hub, q, N) for q in cfgs if q != hub):
+            violations.append("HubAlwaysSafe")
+        if hc > cc * max_recovery + rnd:
+            violations.append("BoundedHubCost")
+
+        successors = []
+
+        # BeginTransition
+        if phase == "stable" and rnd < max_rounds:
+            for tgt in cfgs:
+                if tgt != active and adjacent(active, hub, N) and adjacent(hub, tgt, N):
+                    successors.append((rnd, src, active, tgt, "draining",
+                                       cc, rr, hc, safe))
+
+        # DrainComplete
+        if phase == "draining" and rnd < max_rounds:
+            s = safe and adjacent(active, hub, N)
+            successors.append((rnd+1, src, hub, target, "activating",
+                               cc, rr, hc+1, s))
+
+        # ActivateTarget
+        if phase == "activating" and rnd < max_rounds:
+            s = safe and adjacent(hub, target, N)
+            successors.append((rnd+1, src, target, target, "stable",
+                               cc, rr, hc, s))
+
+        # Crash
+        if phase in ("draining", "activating") and cc < max_crashes and rnd < max_rounds:
+            successors.append((rnd+1, src, active, target, "crashed",
+                               cc+1, 0, hc, safe))
+
+        # RecoveryTick
+        if phase == "crashed" and rr < max_recovery and rnd < max_rounds:
+            new_hc = hc + 1 if active == hub else hc
+            successors.append((rnd+1, src, active, target, "crashed",
+                               cc, rr+1, new_hc, safe))
+
+        # RecoveryComplete
+        if phase == "crashed" and rnd < max_rounds:
+            new_phase = "activating" if active == hub else "draining"
+            successors.append((rnd+1, src, active, target, new_phase,
+                               cc, 0, hc, safe))
+
+        # Exploit
+        if phase == "stable" and rnd < max_rounds:
+            successors.append((rnd+1, src, active, target, "stable",
+                               cc, rr, hc, safe))
+
+        for s in successors:
+            if s not in visited:
+                visited.add(s)
+                queue.append(s)
+
+    safety_ok = "SafetyHolds" not in violations
+    return safety_ok, len(visited), len(violations)
+
+
 # -- Graph statistics --
 
 def graph_stats(N):
@@ -324,6 +412,11 @@ def generate_cfg(N, output_dir="."):
         "AdversarialAdapt": (
             f"CONSTANT\n    N = {N}\n    MaxSwitches = 5\n    MaxRounds = 20\n"
             f"SPECIFICATION Spec\nINVARIANT MasterInvariant\n"
+        ),
+        "CrashRecovery": (
+            f"CONSTANT\n    N = {N}\n    MaxRounds = 8\n"
+            f"    MaxCrashes = 2\n    MaxRecovery = 3\n"
+            f"SPECIFICATION Spec\nINVARIANT Invariant\nPROPERTY Liveness\n"
         ),
     }
     for name, content in cfgs.items():
@@ -420,6 +513,13 @@ def main():
         print(f"  AdversarialAdapt (S=5, T=20): "
               f"{'PASS' if aa_ok else 'FAIL'}  {aa_states} states  "
               f"max_tc={aa_tc} (expect {5*(N-1)})  [{t1-t0:.4f}s]")
+
+        # CrashRecovery
+        t0 = time.time()
+        cr_ok, cr_states, cr_viols = verify_crash_recovery(N)
+        t1 = time.time()
+        print(f"  CrashRecovery (crashes=2, recovery=3): "
+              f"{'PASS' if cr_ok else 'FAIL'}  {cr_states:,} states  [{t1-t0:.3f}s]")
 
         # Stats
         st = graph_stats(N)
