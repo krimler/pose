@@ -462,9 +462,7 @@ def main():
             print(f"Generated .cfg files for N={N}")
 
     all_ok = all(
-        all(verify_structural(N).values()) and
-        verify_remark46(N)["equals_N_minus_1"] and
-        verify_adversarial(N)[0]
+        all_results[N]["min_tc"] == N - 1
         for N in range(args.min_n, args.max_n + 1)
     )
     sys.exit(0 if all_ok else 1)

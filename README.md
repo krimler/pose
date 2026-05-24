@@ -84,14 +84,15 @@ Only needs Python 3.7+. No libraries.
 
 Remark 4.6 is a conjecture in the paper (the proofs only need the 2-hop case).
 We verify it for all path lengths using Dijkstra on a weighted graph where each
-node's weight is its suboptimality. This runs in under 1ms per N and avoids the
-state explosion you get from enumerating paths.
+node's weight is its suboptimality.
 
 ## Scalability results
 
 `benchmark.py` verifies the same properties at larger N. Each property is first
 proven analytically (instant for any N), then cross-validated by exhaustive
-computation where feasible.
+computation where feasible. The Dijkstra cross-validation runs for N up to 600;
+beyond that, the analytical proof covers Remark 4.6 and the remaining checks
+are O(N^2).
 
 ```
      N |     |Configs| |   Time
@@ -105,11 +106,7 @@ computation where feasible.
  10000 |    50,005,000  | 20.86s
 ```
 
-All pass. Nothing takes more than 21 seconds even at N=10,000 (50 million configs).
-
-The time is not monotone because different checks dominate at different N.
-At N=500, the Dijkstra cross-validation runs (6 seconds). At N=700+, Dijkstra
-is skipped (analytical proof covers it) and the remaining checks are O(N^2).
+All pass. Nothing takes more than 21 seconds at N=10,000 (50 million configs).
 
 ## The state explosion in TLC
 
@@ -126,11 +123,8 @@ walks through the transition graph grows exponentially:
 | 10 | over 10 million                  | 12,760                 |
 
 `PipelinedReconfigOpt.text` fixes this. It checks the same four invariants
-but only tracks what they actually need: the current config, the previous
-config, the first step taken, a step counter, and two boolean flags. The
-state space stays polynomial.
-
-Both specs verify the same properties. Use the optimized one for TLC.
+but only tracks what they actually need: current config, previous config,
+first step taken, step counter, and two boolean flags. Use this one for TLC.
 
 ## Running TLC
 

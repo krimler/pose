@@ -107,23 +107,9 @@ CompletionRequiresMaxW ==
     done => \E i \in 2..(Len(history)-1) : history[i][2] = N
 
 (***************************************************************************)
-(* Transition Cost Tracking                                                *)
-(*                                                                         *)
-(* For alpha=0, beta=1 (write-dominated, optimal=(N,1)):                   *)
-(* Transition cost = sum of (w_i - 1) for intermediate configs             *)
+(* If done in exactly 2 steps, the path must be (1,N) -> (N,N) -> (N,1).  *)
+(* This is the unique minimum-cost safe path (Theorem 5.3).                *)
 (***************************************************************************)
-
-TransitionCost ==
-    IF Len(history) <= 2 THEN 0
-    ELSE LET intermediates == SubSeq(history, 2, Len(history)-1)
-         IN \* We can't easily sum in TLA+ without recursion,
-            \* but we can check the lower bound:
-            \* Every intermediate has suboptimality >= 0,
-            \* and the first has w=N so suboptimality = N-1
-            TRUE
-
-\* The minimum possible transition cost is N-1
-\* (achieved only by the 2-hop path through (N,N))
 MinCostAchieved ==
     done =>
         \* If done in exactly 2 steps: path is (1,N) -> (N,N) -> (N,1)

@@ -16,12 +16,12 @@ CONSTANT N
 CONSTANT MaxSteps
 
 VARIABLES
-    currentConfig,   \* Current active configuration
-    prevConfig,      \* Previous configuration (for adjacency check)
-    firstStep,       \* The first intermediate config (for bottleneck check)
-    step,            \* Step counter
-    done,            \* Reached target?
-    seenMaxW         \* Have we visited a config with w=N?
+    currentConfig,
+    prevConfig,
+    firstStep,       \* For bottleneck check; (0,0) sentinel = no step yet
+    step,
+    done,
+    seenMaxW         \* TRUE once any visited config has w=N
 
 vars == <<currentConfig, prevConfig, firstStep, step, done, seenMaxW>>
 

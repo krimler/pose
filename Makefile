@@ -29,9 +29,9 @@ latex:
 	$(PYTHON) verify_all.py --latex
 
 # TLC targets (require Java and tla2tools.jar)
-tlc: FlexPaxosGraph.tla PipelinedReconfig.tla AdversarialAdapt.tla
+tlc: FlexPaxosGraph.tla PipelinedReconfigOpt.tla AdversarialAdapt.tla
 	java -jar $(TLA2TOOLS) -config FlexPaxosGraph_N10.cfg FlexPaxosGraph.tla
-	java -jar $(TLA2TOOLS) -config PipelinedReconfig_N10.cfg PipelinedReconfig.tla
+	java -jar $(TLA2TOOLS) -config PipelinedReconfigOpt_N10.cfg PipelinedReconfigOpt.tla
 	java -jar $(TLA2TOOLS) -config AdversarialAdapt_N10.cfg AdversarialAdapt.tla
 
 # Create .tla symlinks for TLC

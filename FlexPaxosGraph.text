@@ -52,6 +52,7 @@ Unique2HopIntermediate ==
   \A q \in Configs :
     (Adjacent(ReadOptimal, q) /\ Adjacent(q, WriteOptimal))
       => q = MaxConfig
+\* Write-dominated regime (alpha=0, beta=1): suboptimality vs (N,1)
 Subopt(q) == W(q) - 1
 Min2HopCost ==
   \A q \in Configs :

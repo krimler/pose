@@ -104,7 +104,6 @@ AdversarySwitch ==
 TransitToHub ==
     /\ reconfigState = "transiting_to_hub"
     /\ round < MaxRounds
-    \* Safety check
     /\ IF Adjacent(activeConfig, Hub)
        THEN /\ safetyViolation' = safetyViolation
        ELSE /\ safetyViolation' = TRUE
@@ -124,7 +123,6 @@ TransitToHub ==
 TransitFromHub ==
     /\ reconfigState = "transiting_from_hub"
     /\ round < MaxRounds
-    \* Safety check
     /\ IF Adjacent(Hub, optimalConfig)
        THEN /\ safetyViolation' = safetyViolation
        ELSE /\ safetyViolation' = TRUE
